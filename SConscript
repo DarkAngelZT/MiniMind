@@ -69,6 +69,7 @@ def configure_minimind(target, source, env):
         "-B", minimind_build_dir,
         "-DCMAKE_BUILD_TYPE=" + cmake_build_type,
         "-DCMAKE_POSITION_INDEPENDENT_CODE=ON",
+        "-DMINIMIND_BUILD_TESTS=OFF",
     ]
 
     if platform_name == "windows":
@@ -119,12 +120,12 @@ def build_minimind(target, source, env):
 configure_node = env.Command(
     configure_stamp,
     collect_inputs(configuration_only=True),
-    configure_minimind,
+    Action(configure_minimind, "正在配置 MiniMind（${TARGET}）..."),
 )
 build_node = env.Command(
     build_stamp,
     collect_inputs(configuration_only=False) + configure_node,
-    build_minimind,
+    Action(build_minimind, "正在构建 MiniMind 和 MNN（${TARGET}）..."),
 )
 
 # 调用方只需导入本入口，所需头文件、库目录和链接库会自动附加。
@@ -138,11 +139,5 @@ env.Append(LIBPATH=[
     os.path.join(minimind_build_dir, "mnn"),
 ])
 env.Append(LIBS=["MiniMind", "MNN", "pthread"])
-
-# MiniMind 使用标准异常报告非法输入，而 godot-cpp 默认关闭异常。
-if env.get("is_msvc", False):
-    env.Append(CXXFLAGS=["/EHsc"])
-else:
-    env.Append(CXXFLAGS=["-fexceptions"])
 
 Return("build_node")

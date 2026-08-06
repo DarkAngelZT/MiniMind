@@ -53,7 +53,9 @@ void test_fixed_weights_produce_exact_attention() {
     set_identity_weights(attention);
     const float input_values[] = {1.0f, 0.0f,
                                   0.0f, 1.0f};
-    auto output = attention.forward(constant(input_values, {1, 2, 2}));
+    const float mask_values[] = {1.0f, 1.0f};
+    auto output = attention.forward(constant(input_values, {1, 2, 2}),
+                                    constant(mask_values, {1, 2}));
     const auto* info = output->getInfo();
     if (info == nullptr || info->dim != std::vector<int>({1, 2, 2})) {
         fail("输出形状不是[1,2,2]");
@@ -74,12 +76,51 @@ void test_batches_do_not_mix() {
     const float batch_values[] = {1.0f, 0.0f, 0.0f, 1.0f,
                                   2.0f, 1.0f, 1.0f, 2.0f};
     const float second_values[] = {2.0f, 1.0f, 1.0f, 2.0f};
-    auto batch_output = attention.forward(constant(batch_values, {2, 2, 2}));
-    auto single_output = attention.forward(constant(second_values, {1, 2, 2}));
+    const float batch_mask_values[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    const float single_mask_values[] = {1.0f, 1.0f};
+    auto batch_output = attention.forward(constant(batch_values, {2, 2, 2}),
+                                          constant(batch_mask_values, {2, 2}));
+    auto single_output = attention.forward(constant(second_values, {1, 2, 2}),
+                                           constant(single_mask_values, {1, 2}));
     const float* batch_data = batch_output->readMap<float>();
     const float* single_data = single_output->readMap<float>();
     for (int i = 0; i < 4; ++i) {
         expect_near(batch_data[4 + i], single_data[i], "批次隔离");
+    }
+}
+
+void test_mask_excludes_padding_keys_and_zeroes_padding_queries() {
+    // This fails if mask[1] still participates as a key or if padded output
+    // positions are not explicitly zeroed after attention.
+    MiniMind::Attention attention(2, 2);
+    set_identity_weights(attention);
+    const float input_values[] = {1.0f, 0.0f,
+                                  100.0f, 100.0f,
+                                  0.0f, 1.0f};
+    const float mask_values[] = {1.0f, 0.0f, 1.0f};
+    auto output = attention.forward(constant(input_values, {1, 3, 2}),
+                                    constant(mask_values, {1, 3}));
+    const float expected[] = {0.66976155f, 0.33023845f,
+                              0.0f, 0.0f,
+                              0.33023845f, 0.66976155f};
+    const float* actual = output->readMap<float>();
+    for (int i = 0; i < 6; ++i) {
+        expect_near(actual[i], expected[i], "mask attention result");
+    }
+}
+
+void test_all_padding_produces_finite_zero_output() {
+    // This fails if a softmax over an all--infinity row leaks NaNs.
+    MiniMind::Attention attention(2, 2);
+    set_identity_weights(attention);
+    const float input_values[] = {1.0f, 2.0f,
+                                  3.0f, 4.0f};
+    const float mask_values[] = {0.0f, 0.0f};
+    auto output = attention.forward(constant(input_values, {1, 2, 2}),
+                                    constant(mask_values, {1, 2}));
+    const float* actual = output->readMap<float>();
+    for (int i = 0; i < 4; ++i) {
+        expect_near(actual[i], 0.0f, "all padding output");
     }
 }
 
@@ -116,9 +157,11 @@ void test_invalid_inputs_are_rejected() {
     MiniMind::Attention attention(2, 2);
     const float values[] = {1.0f, 2.0f, 3.0f, 4.0f};
     auto rank_two = constant(values, {2, 2});
+    const float mask_values[] = {1.0f, 1.0f};
+    auto valid_mask = constant(mask_values, {1, 2});
     bool rank_threw = false;
     try {
-        (void)attention.forward(rank_two);
+        (void)attention.forward(rank_two, valid_mask);
     } catch (const std::invalid_argument&) {
         rank_threw = true;
     }
@@ -129,7 +172,8 @@ void test_invalid_inputs_are_rejected() {
     const float wrong_feature_values[] = {1, 2, 3, 4, 5, 6};
     bool feature_threw = false;
     try {
-        (void)attention.forward(constant(wrong_feature_values, {1, 2, 3}));
+        (void)attention.forward(constant(wrong_feature_values, {1, 2, 3}),
+                                valid_mask);
     } catch (const std::invalid_argument&) {
         feature_threw = true;
     }
@@ -139,7 +183,7 @@ void test_invalid_inputs_are_rejected() {
 
     bool count_threw = false;
     try {
-        (void)attention.onForward({rank_two, rank_two});
+        (void)attention.onForward({rank_two, valid_mask, valid_mask});
     } catch (const std::invalid_argument&) {
         count_threw = true;
     }
@@ -153,6 +197,8 @@ void test_invalid_inputs_are_rejected() {
 int main() {
     test_fixed_weights_produce_exact_attention();
     test_batches_do_not_mix();
+    test_mask_excludes_padding_keys_and_zeroes_padding_queries();
+    test_all_padding_produces_finite_zero_output();
     test_parameters_are_registered_trainable_and_cloned();
     test_invalid_inputs_are_rejected();
     std::cout << "MiniMind Attention测试通过\n";

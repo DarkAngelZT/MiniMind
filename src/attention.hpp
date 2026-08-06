@@ -9,6 +9,11 @@ class Attention final : public MNN::Express::Module {
 public:
     Attention(int feature_count, int key_dim);
 
+    // input: [batch, entity, feature_count], mask: [batch, entity] with 0/1 values.
+    MNN::Express::VARP forward(
+        const MNN::Express::VARP& input,
+        const MNN::Express::VARP& mask);
+
     std::vector<MNN::Express::VARP> onForward(
         const std::vector<MNN::Express::VARP>& inputs) override;
 
